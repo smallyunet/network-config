@@ -31,7 +31,7 @@ moniker = "pellcore4"
 #   - use cleveldb build tag (go build -tags cleveldb)
 # * boltdb (uses etcd's fork of bolt - github.com/etcd-io/bbolt)
 #   - EXPERIMENTAL
-#   - may be faster is some use-cases (random reads - indexer)
+#   - may be faster in some use-cases (random reads - indexer)
 #   - use boltdb build tag (go build -tags boltdb)
 # * rocksdb (uses github.com/tecbot/gorocksdb)
 #   - EXPERIMENTAL
@@ -282,7 +282,7 @@ dial_timeout = "3s"
 type = "flood"
 
 # Recheck (default: true) defines whether CometBFT should recheck the
-# validity for all remaining transaction in the mempool after a block.
+# validity for all remaining transactions in the mempool after a block.
 # Since a block affects the application state, some transactions in the
 # mempool may become invalid. If this does not apply to your application,
 # you can disable rechecking.
