@@ -28,9 +28,9 @@
 # Configuration parameters
 DAEMON_HOME=$HOME/.pellcored/cosmovisor
 CHAIN_ID="ignite_186-1"
-KEY_NAME="validator"  # validator key name
+KEY_NAME="operator"  # validator operator key name
 
-PROPOSAL_ID="1"  # upgrade proposal ID
+PROPOSAL_ID="3"  # upgrade proposal ID
 UPGRADE_NAME="v1.0.20" # upgrade name matching the governance proposal
 BINARY_URL="https://github.com/0xPellNetwork/network-config/releases/download/v1.0.20-ignite/pellcored-v1.0.20-linux-amd64"  # binary download URL
 
