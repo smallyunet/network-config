@@ -68,7 +68,7 @@ download_and_verify_wasmvm() {
     return 0
 }
 
-function download_and_move_binaries {
+download_and_move_binaries() {
   logt "Downloading binary list from ${BINARY_LIST_TESTNET}"
   wget -q -O binary_list.json "${BINARY_LIST_TESTNET}" || {
     logt "ERROR: Failed to download binary list from ${BINARY_LIST_TESTNET}. Please check the URL or your network connection."
@@ -85,7 +85,8 @@ function download_and_move_binaries {
   fi
 
   # Parse the JSON variable and download/move files
-  echo "${DOWNLOAD_BINARIES}" | jq -c '.binaries[]' | while read -r binary; do
+  local last_downloaded_binary_location=""
+  while read -r binary; do
     # Extract the download URL and target location
     local download_url=$(echo "${binary}" | jq -r '.download_url')
     local binary_location=$(echo "${binary}" | jq -r '.binary_location')
@@ -117,10 +118,24 @@ function download_and_move_binaries {
     mv "${binary_file}" "${DAEMON_HOME}/${binary_location}"
     if [ $? -eq 0 ]; then
       logt "Successfully downloaded and moved the binary to ${DAEMON_HOME}/${binary_location}"
+      last_downloaded_binary_location="${binary_location}"
     else
       logt "Failed to move binary to ${DAEMON_HOME}/${binary_location}"
     fi
-  done
+  done < <(echo "${DOWNLOAD_BINARIES}" | jq -c '.binaries[]')
+
+  logt "Last downloaded binary location: ${last_downloaded_binary_location}"
+
+  if [ "${FAST_SYNC}" = "true" ] && [ -n "${last_downloaded_binary_location}" ]; then
+    local last_downloaded_binary_path="${DAEMON_HOME}/${last_downloaded_binary_location}"
+    local first_binary_path="${DAEMON_HOME}/cosmovisor/genesis/bin/pellcored"
+    if [ -f "${last_downloaded_binary_path}" ]; then
+      cp -f "${last_downloaded_binary_path}" "${first_binary_path}"
+      logt "FAST_SYNC is enabled. Overwrote ${first_binary_path} with ${last_downloaded_binary_path}"
+    else
+      logt "FAST_SYNC enabled but last downloaded binary not found: ${last_downloaded_binary_path}"
+    fi
+  fi
 }
 
 function init_chain {
