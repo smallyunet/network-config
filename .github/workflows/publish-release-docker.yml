@@ -141,7 +141,7 @@ jobs:
       - name: Notify Lark upon release
         uses: drayeasy/action-lark-notify@main
         env:
-          LARK_WEBHOOK: ${{ secrets.LARK_WEBHOOK_URL_FOR_RELEASE }}
+          LARK_WEBHOOK: ${{ secrets.LARK_WEBHOOK }}
           LARK_MESSAGE_TITLE: "🚀 Pell Network PreRelease ${{ github.ref_name }}"
           LARK_MESSAGE_URL: "${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
           LARK_MESSAGE_TEMPLATE: "yellow"
