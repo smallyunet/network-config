@@ -12,10 +12,18 @@ function load_defaults {
   export COSMOVISOR_CHECKSUM=${COSMOVISOR_CHECKSUM:=7f4bebfb18a170bff1c725f13dda326e0158132deef9f037ab0c2a48727c3077}
   export VISOR_NAME=${VISOR_NAME:=${DAEMON_HOME}/cosmovisor/cosmovisor}
   export DAEMON_NAME=${DAEMON_NAME:=pellcored}
+  export DAEMON_ALLOW_DOWNLOAD_BINARIES=${DAEMON_ALLOW_DOWNLOAD_BINARIES:=true}
+  export DAEMON_RESTART_AFTER_UPGRADE=${DAEMON_RESTART_AFTER_UPGRADE:=true}
   export MONIKER=${MONIKER:=local-test}
   export FAST_SYNC=${FAST_SYNC:=true}
   export WASMVM_VERSION=${WASMVM_VERSION:=v2.1.2}
   export LD_LIBRARY_PATH=${LD_LIBRARY_PATH:=~/.pellcored/lib}
+  export DEBUG=${DEBUG:=false}
+  export LOG_LEVEL=${LOG_LEVEL:=info}
+  export SEEDS=${SEEDS:=""}
+  export RPC_SERVERS=${RPC_SERVERS:=""}
+  export IS_ARCHIVE=${IS_ARCHIVE:=false}
+
 
   # TESTNET
   export BINARY_LIST_TESTNET=${BINARY_LIST_TESTNET:=https://raw.githubusercontent.com/0xPellNetwork/network-config/refs/heads/main/testnet/binary_list.json}
@@ -84,57 +92,120 @@ download_and_move_binaries() {
     return 1
   fi
 
-  # Parse the JSON variable and download/move files
-  local last_downloaded_binary_location=""
-  while read -r binary; do
-    # Extract the download URL and target location
-    local download_url=$(echo "${binary}" | jq -r '.download_url')
-    local binary_location=$(echo "${binary}" | jq -r '.binary_location')
+  # --------------------------------------------------------------------------------
+  # If FAST_SYNC is enabled, only download the *last* binary from the JSON array.
+  # Otherwise, download all binaries.
+  # --------------------------------------------------------------------------------
+  if [ "${FAST_SYNC}" = "true" ]; then
+    logt "FAST_SYNC is enabled. Will only download the last binary to save resources."
 
-    if [ -z "${download_url}" ] || [ -z "${binary_location}" ]; then
-      logt "Invalid JSON entry: ${binary}"
-      continue
-    fi
+    # Extract the last binary object from the array
+    local last_binary=$(echo "${DOWNLOAD_BINARIES}" | jq -c '.binaries | last')
 
-    # Extract the file name from the URL
-    local binary_file=$(basename "${download_url}")
+    if [ -n "${last_binary}" ] && [ "${last_binary}" != "null" ]; then
+      # Extract download URL and target location
+      local download_url=$(echo "${last_binary}" | jq -r '.download_url')
+      local binary_location=$(echo "${last_binary}" | jq -r '.binary_location')
 
-    # Download the file
-    logt "Downloading binary from ${download_url}"
-    wget -q -O "${binary_file}" "${download_url}"
-    if [ $? -ne 0 ]; then
-      logt "Failed to download binary from ${download_url}"
-      continue
-    fi
-
-    # Set executable permissions for the file
-    chmod +x "${binary_file}"
-
-    # Create the target directory
-    local target_dir="${DAEMON_HOME}/${binary_location%/*}" # Remove the file name to get the target directory
-    mkdir -p "${target_dir}" || logt "Directory already exists or failed to create: ${target_dir}"
-
-    # Move the file to the target location
-    mv "${binary_file}" "${DAEMON_HOME}/${binary_location}"
-    if [ $? -eq 0 ]; then
-      logt "Successfully downloaded and moved the binary to ${DAEMON_HOME}/${binary_location}"
-      last_downloaded_binary_location="${binary_location}"
+      if [ -n "${download_url}" ] && [ -n "${binary_location}" ]; then
+        # Download and move the single last binary
+        process_single_binary "${download_url}" "${binary_location}"
+        # After downloading, overwrite the genesis binary (if needed) since FAST_SYNC=true
+        overwrite_genesis_binary "${binary_location}"
+      else
+        logt "Invalid last JSON entry: ${last_binary}"
+      fi
     else
-      logt "Failed to move binary to ${DAEMON_HOME}/${binary_location}"
+      logt "No last binary object found in JSON."
     fi
-  done < <(echo "${DOWNLOAD_BINARIES}" | jq -c '.binaries[]')
 
-  logt "Last downloaded binary location: ${last_downloaded_binary_location}"
+  else
+    # FAST_SYNC != true, download all binaries as before
+    logt "FAST_SYNC is disabled. Downloading all binaries."
 
-  if [ "${FAST_SYNC}" = "true" ] && [ -n "${last_downloaded_binary_location}" ]; then
-    local last_downloaded_binary_path="${DAEMON_HOME}/${last_downloaded_binary_location}"
-    local first_binary_path="${DAEMON_HOME}/cosmovisor/genesis/bin/pellcored"
-    if [ -f "${last_downloaded_binary_path}" ]; then
-      cp -f "${last_downloaded_binary_path}" "${first_binary_path}"
-      logt "FAST_SYNC is enabled. Overwrote ${first_binary_path} with ${last_downloaded_binary_path}"
-    else
-      logt "FAST_SYNC enabled but last downloaded binary not found: ${last_downloaded_binary_path}"
-    fi
+    local last_downloaded_binary_location=""
+
+    # Loop through each binary in the JSON array
+    while read -r binary; do
+      # Extract the download URL and target location
+      local download_url=$(echo "${binary}" | jq -r '.download_url')
+      local binary_location=$(echo "${binary}" | jq -r '.binary_location')
+
+      if [ -z "${download_url}" ] || [ -z "${binary_location}" ]; then
+        logt "Invalid JSON entry: ${binary}"
+        continue
+      fi
+
+      # Process each binary
+      if process_single_binary "${download_url}" "${binary_location}"; then
+        last_downloaded_binary_location="${binary_location}"
+      fi
+    done < <(echo "${DOWNLOAD_BINARIES}" | jq -c '.binaries[]')
+
+    # When FAST_SYNC=false, we don't need to overwrite, but if you still want the final 
+    # binary to be the "active" one, you could do that below:
+    logt "Last downloaded binary location: ${last_downloaded_binary_location}"
+  fi
+
+  # --------------------------------------------------------------------------------
+  # Debug logic remains the same: if DEBUG=true, do the extra steps
+  # --------------------------------------------------------------------------------
+  if [ "${DEBUG}" = "true" ] && [ -n "${binary_location}" ]; then
+    logt "DEBUG is enabled. Listing files in ${DAEMON_HOME}"
+    ls -al "${DAEMON_HOME}"
+    cp /usr/local/bin/pellcored "${DAEMON_HOME}/${binary_location}"
+    logt "DEBUG is enabled. Overwrote ${DAEMON_HOME}/${binary_location} with /usr/local/bin/pellcored"
+  fi
+}
+
+# --------------------------------------------------------------------------------
+# Helper function to download and move a single binary
+# --------------------------------------------------------------------------------
+process_single_binary() {
+  local download_url="$1"
+  local binary_location="$2"
+
+  # Extract the file name from the URL
+  local binary_file=$(basename "${download_url}")
+
+  logt "Downloading binary from ${download_url}"
+  wget -q -O "${binary_file}" "${download_url}"
+  if [ $? -ne 0 ]; then
+    logt "Failed to download binary from ${download_url}"
+    return 1
+  fi
+
+  # Set executable permissions
+  chmod +x "${binary_file}"
+
+  # Create the target directory
+  local target_dir="${DAEMON_HOME}/${binary_location%/*}"
+  mkdir -p "${target_dir}" || logt "Directory already exists or failed to create: ${target_dir}"
+
+  # Move the file to the target location
+  mv "${binary_file}" "${DAEMON_HOME}/${binary_location}"
+  if [ $? -eq 0 ]; then
+    logt "Successfully downloaded and moved the binary to ${DAEMON_HOME}/${binary_location}"
+  else
+    logt "Failed to move binary to ${DAEMON_HOME}/${binary_location}"
+    return 1
+  fi
+}
+
+# --------------------------------------------------------------------------------
+# Helper function to overwrite the genesis binary if FAST_SYNC is enabled
+# --------------------------------------------------------------------------------
+overwrite_genesis_binary() {
+  local binary_location="$1"
+  local last_downloaded_binary_path="${DAEMON_HOME}/${binary_location}"
+  local first_binary_path="${DAEMON_HOME}/cosmovisor/genesis/bin/pellcored"
+
+  mkdir -p "$(dirname "${first_binary_path}")"
+  if [ -f "${last_downloaded_binary_path}" ]; then
+    cp -f "${last_downloaded_binary_path}" "${first_binary_path}"
+    logt "FAST_SYNC is enabled. Overwrote ${first_binary_path} with ${last_downloaded_binary_path}"
+  else
+    logt "FAST_SYNC enabled but last downloaded binary not found: ${last_downloaded_binary_path}"
   fi
 }
 
@@ -185,17 +256,35 @@ function change_config_values {
     sed -i.bak -E "s|^(trust_height[[:space:]]+=[[:space:]]+).*$|\1$LATEST_HEIGHT|" ${DAEMON_HOME}/config/config.toml
     sed -i.bak -E "s|^(trust_hash[[:space:]]+=[[:space:]]+).*$|\1\"$TRUST_HASH\"|" ${DAEMON_HOME}/config/config.toml
 
+    if [ ! -z "${RPC_SERVERS}" ]; then
+        sed -i.bak -E "s|^(rpc_servers[[:space:]]+=[[:space:]]+)\".*\"|\1\"${RPC_SERVERS}\"|" "${DAEMON_HOME}/config/config.toml"
+    fi
+
+    if [ ! -z "${SEEDS}" ]; then
+      sed -i.bak -E "s|^(seeds[[:space:]]+=[[:space:]]+)\".*\"|\1\"${SEEDS}\"|" "${DAEMON_HOME}/config/config.toml"
+      sed -i.bak -E "s|^(persistent_peers[[:space:]]+=[[:space:]]+)\".*\"|\1\"${SEEDS}\"|" "${DAEMON_HOME}/config/config.toml"        
+    fi
+
     logt "Fast sync configured."
+  fi
+
+  if [ "${IS_ARCHIVE}" == "true" ]; then
+    sed -i.bak -E "s|^(pruning[[:space:]]+=[[:space:]]+).*$|\1\"nothing\"|" "${DAEMON_HOME}/config/app.toml" # pruning nothing
+    sed -i.bak -E "s|^(min-retain-blocks[[:space:]]+=[[:space:]]+).*$|\0|" "${DAEMON_HOME}/config/app.toml" # keep all blocks
+    sed -i.bak -E "s|^(snapshot-interval[[:space:]]+=[[:space:]]+).*$|\1 1000|" "${DAEMON_HOME}/config/app.toml" # 1000 blocks generate a snapshot
+    sed -i.bak -E "s|^(snapshot-keep-recent[[:space:]]+=[[:space:]]+).*$|\0|" "${DAEMON_HOME}/config/app.toml" # keep all snapshots
   fi
 }
 
 function start_network {
   ${VISOR_NAME} version
   ${VISOR_NAME} run start --home ${DAEMON_HOME} \
-    --log_level info \
+    --log_level ${LOG_LEVEL} \
     --moniker ${MONIKER} \
     --rpc.laddr tcp://0.0.0.0:26657 \
-    --minimum-gas-prices 1.0apell "--grpc.enable=true"
+    --minimum-gas-prices 1.0apell \
+    --grpc.enable=true \
+    --chain-id ${CHAIN_ID}
 }
 
 logt "Load Default Values for ENV Vars if not set."
